@@ -41,7 +41,9 @@ def get_logger(name: str = "trainer", run_dir: Union[Path, None] = None):
         log_file_path = run_dir / f"train.log"
 
         file_handler = logging.FileHandler(log_file_path)
-        file_handler.setFormatter(ColoredFormatter())
+        file_handler.setFormatter(logging.Formatter(
+        "%(levelname)s %(asctime)s %(process)d %(filename)s:%(lineno)4d: %(message)s"
+        ))
         logger.addHandler(file_handler)
     
     return logger

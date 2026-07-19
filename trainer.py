@@ -145,3 +145,4 @@ class Trainer(nn.Module):
         )
 
         self.logger.info(f"Checkpoint saved to {save_path}")
+    

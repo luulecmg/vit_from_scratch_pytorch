@@ -56,7 +56,6 @@ def save_config(args, run_dir: Path):
     with open(config_path, "w") as f:
         json.dump(vars(args), f, indent=4)
 
-
 def main():
     args = get_args()
 
@@ -66,6 +65,7 @@ def main():
     run_dir = experiment_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
     save_config(args, run_dir)
+    
 
     train_loader = build_dataloader(args, is_train=True)
     val_loader = build_dataloader(args, is_train=False)
