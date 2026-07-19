@@ -16,7 +16,7 @@ class ViT(nn.Module):
             (B, 10) for MNIST dataset
     '''
     def __init__(self, args):
-        
+
         super().__init__()
         self.embed_dim = args.embed_channel
         self.num_token = (args.image_size//args.patch_size) ** 2
@@ -29,6 +29,7 @@ class ViT(nn.Module):
             for _ in range(args.depth)
         ])
         self.mlp_head = nn.Linear(args.embed_channel, args.num_class)
+        self.model_name = f"ViT_patch{args.patch_size}_dim{args.embed_channel}_depth{args.depth}"
     
     def forward(self, image: Tensor):
         '''

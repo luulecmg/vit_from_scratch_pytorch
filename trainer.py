@@ -7,17 +7,21 @@ from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
+from pathlib import Path
+
+
 
 class Trainer(nn.Module):
     def __init__(self, args) -> None:
         super().__init__()
         self.args = args
+        self.ckpt_dir = args.save_ckpt_dir
         self.model = ViT(args)
         self.optimizer = torch.optim.AdamW(self.model.parameters(),
                                            lr=args.lr,
                                            weight_decay=args.weight_decay)
         self.loss_fn = nn.CrossEntropyLoss()
-
+        self.epoch = 0
     
     def train(self, loader):
         self.model.to(self.args.device)
@@ -28,7 +32,7 @@ class Trainer(nn.Module):
             epoch_loss = 0
             epoch_acc = 0
 
-            for images, labels in tqdm(loader, desc=f"Epoch: {epoch + 1}", leave=False):
+            for images, labels in tqdm(loader, desc=f"Training epoch {epoch + 1}", leave=False):
                 images, labels = images.to(self.args.device), labels.to(self.args.device)
 
                 logits = self.model(images) # (B, C)
@@ -39,12 +43,14 @@ class Trainer(nn.Module):
                 probs = F.softmax(logits, dim=-1)
                 preds = probs.argmax(dim=-1) # (B)
 
-                acc = accuracy_score(labels, preds, normalize=True)
+                acc = accuracy_score(labels.cpu(), preds.cpu(), normalize=True)
                 epoch_acc += acc
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+            
+            self.epoch = epoch
             
             epoch_loss /= len(loader)
             epoch_acc /= len(loader)
@@ -110,3 +116,17 @@ class Trainer(nn.Module):
         plt.close(fig)
 
         print(f"Saved visualization to {save_path}")
+
+    def save_checkpoint(self):
+        save_dir = Path(self.ckpt_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        save_path = f"{save_dir}/{self.model.model_name}_{self.epoch}.pth"
+
+        torch.save({
+            "epoch": self.epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "total_epoch": self.args.epochs
+        }, save_path
+        )
