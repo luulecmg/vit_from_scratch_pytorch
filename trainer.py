@@ -2,20 +2,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from modeling.vit import ViT
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
-
 from tqdm import tqdm
 from pathlib import Path
 
+from modeling.vit import ViT
+from utils.logger import get_logger
 
 
 class Trainer(nn.Module):
-    def __init__(self, args) -> None:
+    def __init__(self, args, run_dir: Path) -> None:
         super().__init__()
         self.args = args
-        self.ckpt_dir = args.save_ckpt_dir
         self.model = ViT(args)
         self.optimizer = torch.optim.AdamW(self.model.parameters(),
                                            lr=args.lr,
@@ -23,9 +22,11 @@ class Trainer(nn.Module):
         self.loss_fn = nn.CrossEntropyLoss()
         self.epoch = 0
     
+        self.logger = get_logger("trainer", run_dir)
+
     def train(self, loader):
         self.model.to(self.args.device)
-        print(f"--- Start training ---")
+        self.logger.info("--- Start training ---")
         train_loss = []
         train_acc = []
         for epoch in range(self.args.epochs):
@@ -58,14 +59,18 @@ class Trainer(nn.Module):
             train_loss.append(epoch_loss)
             train_acc.append(epoch_acc)
 
-            print(f"Epoch {epoch+1} | Loss: {epoch_loss:.4f} | Acc: {epoch_acc: .2f}")
+            self.logger.info(
+                f"Epoch {epoch+1}/{self.args.epochs} "
+                f"| Loss: {epoch_loss:.4f} "
+                f"| Acc: {epoch_acc:.2f}"
+            )
     
     @torch.no_grad()
-    def test(self, val_loader):
+    def test(self, loader):
         val_loss = 0
         val_acc = 0
 
-        for images, labels in tqdm(val_loader, desc="Validation", leave=False):
+        for images, labels in tqdm(loader, desc="Validation", leave=False):
             images, labels = images.to(self.args.device), labels.to(self.args.device)
 
             logits = self.model(images) # (B, C)
@@ -79,20 +84,26 @@ class Trainer(nn.Module):
             acc = accuracy_score(labels.cpu(), preds.cpu(), normalize=True)
             val_acc += acc
         
-        val_loss /= len(val_loader)
-        val_acc /= len(val_loader)
+        val_loss /= len(loader)
+        val_acc /= len(loader)
 
-        print(f"Test | Loss: {val_loss:.4f} | Acc: {val_acc*100:.2f}%")
+        self.logger.info(
+            f"Test | "
+            f"Loss: {val_loss:.4f} "
+            f"Acc: {val_acc*100:.2f}%"
+        )
 
     @torch.no_grad()
-    def visualize(self, loader: DataLoader, num_images: int = 4, save_path: str = "visualization.png"):
+    def visualize(self, loader: DataLoader, run_dir: Path, num_images: int = 4):
         self.model.eval()
         self.model.to(self.args.device)
 
         try:
             images, labels = next(iter(loader))
         except StopIteration:
-            print("No data available for visualization.")
+            self.logger.warning(
+                f"No data available. Skipping visualization"
+            )
             return
 
         images = images[:num_images].to(self.args.device)
@@ -111,17 +122,19 @@ class Trainer(nn.Module):
             ax.set_title(f"Pred: {pred.item()} | True: {label.item()}")
             ax.axis("off")
 
+        visualize_path = run_dir / f"{self.args.visualize_path}"
+        visualize_path.parent.mkdir(parents=True, exist_ok=True)
+
         fig.tight_layout()
-        fig.savefig(save_path, dpi=150)
+        fig.savefig(visualize_path, dpi=150)
         plt.close(fig)
+        self.logger.info(f"Saved visualization to {visualize_path}")
 
-        print(f"Saved visualization to {save_path}")
-
-    def save_checkpoint(self):
-        save_dir = Path(self.ckpt_dir)
+    def save_checkpoint(self, run_dir: Path):
+        save_dir = run_dir / f"{self.args.save_ckpt_dir}"
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        save_path = f"{save_dir}/{self.model.model_name}_{self.epoch}.pth"
+        save_path = save_dir / f"epoch_{self.epoch+1}.pth"
 
         torch.save({
             "epoch": self.epoch,
@@ -130,3 +143,5 @@ class Trainer(nn.Module):
             "total_epoch": self.args.epochs
         }, save_path
         )
+
+        self.logger.info(f"Checkpoint saved to {save_path}")

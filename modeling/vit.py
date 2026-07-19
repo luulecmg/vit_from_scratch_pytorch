@@ -4,6 +4,10 @@ import torch.nn.functional as F
 import numpy as np
 from torch import Tensor
 
+activation_map = {
+    'gelu': nn.GELU,
+    'relu': nn.ReLU,
+}
 
 class ViT(nn.Module):
     '''
@@ -25,7 +29,7 @@ class ViT(nn.Module):
         self.pos_embed = nn.Parameter(torch.rand((self.num_token+1), args.embed_channel)) # (65, 768)
 
         self.transformers = nn.ModuleList([
-            TransformerEncoder(embed_dim=args.embed_channel, num_head=args.num_head, mlp_scale=args.mlp_scale, activation=args.activation)
+            TransformerEncoder(embed_dim=args.embed_channel, num_head=args.num_head, mlp_scale=args.mlp_scale, activation=activation_map.get(args.activation, nn.GELU))
             for _ in range(args.depth)
         ])
         self.mlp_head = nn.Linear(args.embed_channel, args.num_class)

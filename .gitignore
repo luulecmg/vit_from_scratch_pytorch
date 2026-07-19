@@ -219,4 +219,4 @@ __marimo__/
 
 # data
 data/MNIST/
-output/checkpoints
+experiments/checkpoints/

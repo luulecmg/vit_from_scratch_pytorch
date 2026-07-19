@@ -1,10 +1,25 @@
 import torch
 import torch.nn as nn
+import argparse
 from modeling.vit import ViT, TransformerEncoder, MLP, MultiHeadAttention
 
 
 torch.manual_seed(0)
 image = torch.rand(2, 1, 28, 28)
+
+
+def build_simple_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image_size", type=int, default=28)
+    parser.add_argument("--in_channel", type=int, default=1)
+    parser.add_argument("--embed_channel", type=int, default=64)
+    parser.add_argument("--patch_size", type=int, default=7)
+    parser.add_argument("--num_class", type=int, default=10)
+    parser.add_argument("--depth", type=int, default=2)
+    parser.add_argument("--num_head", type=int, default=4)
+    parser.add_argument("--mlp_scale", type=int, default=2)
+    parser.add_argument("--activation", type=str, default="gelu")
+    return parser.parse_args()
 
 
 def test_multihead_attention():
@@ -33,17 +48,8 @@ def test_mlp():
 
 def test_vit():
     print("\n---Test ViT")
-    vit_model = ViT(
-        image_size=28,
-        in_channel=1,
-        embed_chanel=64,
-        patch_size=7,
-        num_class=10,
-        depth=2,
-        num_head=4,
-        mlp_scale=2,
-        activation=nn.GELU,
-    )
+    args = build_simple_args()
+    vit_model = ViT(args)
     logits = vit_model(image)
     print(f"ViT output shape: {logits.shape}")
 
