@@ -39,7 +39,7 @@ class Trainer(nn.Module):
                 probs = F.softmax(logits, dim=-1)
                 preds = probs.argmax(dim=-1) # (B)
 
-                acc = accuracy_score(labels.cpu(), preds.cpu(), normalize=True)
+                acc = accuracy_score(labels, preds, normalize=True)
                 epoch_acc += acc
 
                 self.optimizer.zero_grad()

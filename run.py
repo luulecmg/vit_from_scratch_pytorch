@@ -35,7 +35,7 @@ def get_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--visualize_num_images", type=int, default=4)
-    parser.add_argument("--visualize_path", type=str, default="visualization.png")
+    parser.add_argument("--visualize_path", type=str, default="./output/visualization.png")
 
     return parser.parse_args()
 
