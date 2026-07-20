@@ -32,3 +32,11 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
+
+"""
+NEXT TASKS:
+- check how to run on multiple gpus
+- re-code again
+- add wandb checking
+- 
+"""

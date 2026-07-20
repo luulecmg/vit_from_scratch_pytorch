@@ -69,12 +69,12 @@ class Trainer():
         if self.is_distributed:
             self.model = torch.nn.parallel.DistributedDataParallel(
                 self.model,
-                device_ids=[self.local_rank] if self.accelerator == "cuda" else [],
+                device_ids=[self.local_rank] if self.accelerator == "cuda" else None,
                 find_unused_parameters=self.distributed_conf.find_unused_parameters,
             )
         
         # 4. Instantiate Datasets & Optimizers
-        self._setup_dataloader(data)
+        self._setup_dataset(data)
         self._construct_optimizer(optim)
 
         self.epoch = 0
@@ -99,19 +99,12 @@ class Trainer():
         else:
             self.device = torch.device("cpu")
 
-    def _setup_dataloader(self, data_conf: Dict[str, Any]):
+    def _setup_dataset(self, data_conf: Dict[str, Any]):
         self.train_dataset = instantiate(data_conf.train)
         self.val_dataset = instantiate(data_conf.val)
 
-        train_sampler = DistributedSampler(self.train_dataset) if self.is_distributed else None
-        val_sampler = DistributedSampler(self.val_dataset, shuffle=False) if self.is_distributed else None
-
-        self.train_loader = DataLoader(
-            self.train_dataset, batch_size=128, sampler=train_sampler, shuffle=(train_sampler is None), num_workers=4
-        )
-        self.val_loader = DataLoader(
-            self.val_dataset, batch_size=128, sampler=val_sampler, shuffle=False, num_workers=4
-        )
+        self.train_sampler = DistributedSampler(self.train_dataset) if self.is_distributed else None
+        self.val_sampler = DistributedSampler(self.val_dataset, shuffle=False) if self.is_distributed else None
     
     def _construct_optimizer(self, optim_conf: Dict[str, Any]):
         raw_model = self.model.module if self.is_distributed else self.model
@@ -129,13 +122,17 @@ class Trainer():
         preds = logits.argmax(dim=1)
         corrects = (preds == labels).sum().item()
 
-        return loss, corrects, images.size(0) # why can we call shape?
+        return loss, corrects, images.shape[0] # why can we call shape?
 
     def run_train(self):
         while self.epoch < self.max_epochs:
-            if self.is_distributed and hasattr(self.train_loader.sampler, "set_epoch"):
-                self.train_loader.sampler.set_epoch(self.epoch)
+            if self.is_distributed:
+                self.train_sampler.set_epoch(self.epoch)
 
+            self.train_loader = DataLoader(
+                self.train_dataset, batch_size=128, sampler=self.train_sampler, shuffle=(self.train_sampler is None), num_workers=4
+            )
+            
             self.model.train()
             total_loss, total_correct, total_samples = 0.0, 0, 0
 
@@ -164,6 +161,10 @@ class Trainer():
             self.epoch += 1
     
     def run_val(self):
+        self.val_loader = DataLoader(
+            self.val_dataset, batch_size=128, sampler=self.val_sampler, shuffle=False, num_workers=4
+        )
+
         self.model.eval()
         total_loss, total_correct, total_samples = 0.0, 0, 0
 
@@ -201,21 +202,8 @@ class Trainer():
     
 
     def run(self):
-        # if self.rank == 0:
-        #     self.logger.info(
-        #         f"🚀 Start ViT training pipeline..."
-        #     )
-
-        self.logger.info(
-                f"🚀 Start ViT training pipeline with {self.rank}"
-            )
+        self.logger.info(f"🚀 Start ViT training pipeline with {self.rank}")
             
         self.run_train()
         
-        # if self.rank == 0:
-        #     self.logger.info(
-        #         f"✅ ViT training completed!"
-        #     )
-        self.logger.info(
-            f"✅ ViT training completed with {self.rank}"
-        )
+        self.logger.info(f"✅ ViT training completed with {self.rank}")
