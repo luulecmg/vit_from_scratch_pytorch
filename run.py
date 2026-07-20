@@ -13,8 +13,8 @@ def setup_distributed_backend(backend="nccl"):
         dist.init_process_group(
             backend=backend,
             init_method="env://",
-            world_size=int(os.environ["WORLD_SIZE"]),
-            rank=int(os.environ["RANK"])
+            # world_size=int(os.environ["WORLD_SIZE"]),
+            # rank=int(os.environ["RANK"])
         )
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
