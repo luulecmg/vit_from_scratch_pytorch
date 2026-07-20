@@ -201,20 +201,21 @@ class Trainer():
     
 
     def run(self):
-        if self.rank == 0:
-            self.logger.info(
-                f"🚀 Start ViT training pipeline..."
-            )
-        if self.is_distributed:
-            print(
-                f"[rank={self.rank}, local_rank={self.local_rank}, "
-                f"world_size={dist.get_world_size()}] training on {self.device}",
-                flush=True,
-            )
+        # if self.rank == 0:
+        #     self.logger.info(
+        #         f"🚀 Start ViT training pipeline..."
+        #     )
 
+        self.logger.info(
+                f"🚀 Start ViT training pipeline with {self.rank}"
+            )
+            
         self.run_train()
         
-        if self.rank == 0:
-            self.logger.info(
-                f"✅ ViT training completed!"
-            )
+        # if self.rank == 0:
+        #     self.logger.info(
+        #         f"✅ ViT training completed!"
+        #     )
+        self.logger.info(
+            f"✅ ViT training completed with {self.rank}"
+        )
