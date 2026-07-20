@@ -205,7 +205,9 @@ class Trainer():
             self.logger.info(
                 f"🚀 Start ViT training pipeline..."
             )
-            self.run_train()
+        self.run_train()
+        
+        if self.rank == 0:
             self.logger.info(
                 f"✅ ViT training completed!"
             )
