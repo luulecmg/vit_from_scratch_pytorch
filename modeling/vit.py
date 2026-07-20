@@ -4,11 +4,6 @@ import torch.nn.functional as F
 import numpy as np
 from torch import Tensor
 
-activation_map = {
-    'gelu': nn.GELU,
-    'relu': nn.ReLU,
-}
-
 class ViT(nn.Module):
     '''
     Input:
@@ -19,21 +14,33 @@ class ViT(nn.Module):
         cls_token of n classes
             (B, 10) for MNIST dataset
     '''
-    def __init__(self, args):
+    def __init__(
+        self,
+        in_channel: int = 1,
+        image_size: int = 28,
+        patch_size: int = 7,
+        embed_channel: int = 64,
+        num_head: int = 4,
+        mlp_scale: int = 4,
+        depth: int = 4,
+        num_class: int = 10,
+        activation: str = "GELU"
+    ):
 
         super().__init__()
-        self.embed_dim = args.embed_channel
-        self.num_token = (args.image_size//args.patch_size) ** 2
-        self.image_patchify = nn.Conv2d(args.in_channel, args.embed_channel, kernel_size=args.patch_size, stride=args.patch_size) # (B, 768, 16, 16)
-        self.cls_token = nn.Parameter(torch.rand(1, args.embed_channel))
-        self.pos_embed = nn.Parameter(torch.rand((self.num_token+1), args.embed_channel)) # (65, 768)
+        self.embed_dim = embed_channel
+        self.num_token = (image_size//patch_size) ** 2
+        self.image_patchify = nn.Conv2d(in_channel, embed_channel, kernel_size=patch_size, stride=patch_size) # (B, 768, 16, 16)
+        self.cls_token = nn.Parameter(torch.rand(1, embed_channel))
+        self.pos_embed = nn.Parameter(torch.rand((self.num_token+1), embed_channel)) # (65, 768)
 
+        activation_cls = nn.GELU if activation == "GELU" else nn.ReLU
         self.transformers = nn.ModuleList([
-            TransformerEncoder(embed_dim=args.embed_channel, num_head=args.num_head, mlp_scale=args.mlp_scale, activation=activation_map.get(args.activation, nn.GELU))
-            for _ in range(args.depth)
+            TransformerEncoder(embed_dim=embed_channel, num_head=num_head, mlp_scale=mlp_scale, activation=activation_cls)
+            for _ in range(depth)
         ])
-        self.mlp_head = nn.Linear(args.embed_channel, args.num_class)
-        self.model_name = f"ViT_patch{args.patch_size}_dim{args.embed_channel}_depth{args.depth}"
+        self.mlp_head = nn.Linear(embed_channel, num_class)
+        self.model_name = f"ViT_patch{patch_size}_dim{embed_channel}_depth{depth}"
     
     def forward(self, image: Tensor):
         '''

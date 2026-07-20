@@ -1,0 +1,73 @@
+defaults:
+  - override hydra/job_logging: disabled
+# ====================================================
+# Path configuration
+# ====================================================
+paths:
+  base_experiment_log_dir: "./experiments"
+  data_root: "./data"
+
+hydra:
+  run:
+    dir: ${paths.base_experiment_log_dir}/run_${now:%Y-%m-%d_%H-%M-%S}
+
+# ====================================================
+# Trainer configuration
+# ====================================================
+trainer:
+  _target_: trainer.Trainer
+  max_epochs: 2
+  val_epoch_freq: 1
+  accelerator: "cuda"
+  skip_saving_ckpts: false
+
+  # distributed DDP setup
+  distributed:
+    backend: nccl
+    find_unused_parameters: false
+  
+  # paths:
+  checkpoint:
+    save_dir: ${hydra:runtime.output_dir}/checkpoints
+    save_freq: 1
+
+  logging:
+    log_dir: ${hydra:runtime.output_dir}/logs
+    logger_name: "trainer"
+
+  # ====================================================
+  # Model configuration
+  # ====================================================
+  model:
+    _target_: modeling.vit.ViT
+    in_channel: 1
+    image_size: 28
+    patch_size: 7
+    embed_channel: 64
+    num_head: 4
+    mlp_scale: 4
+    depth: 4
+    num_class: 10
+  
+  # ====================================================
+  # Dataset configuration
+  # ====================================================
+  data:
+    train:
+      _target_: data.mnist_dataset.build_dataset
+      data_root: ${paths.data_root}
+      is_train: true
+    val:
+      _target_: data.mnist_dataset.build_dataset
+      data_root: ${paths.data_root}
+      is_train: false
+  
+  loss:
+    _target_: torch.nn.CrossEntropyLoss
+
+  optim:
+    optimizer:
+      _target_: torch.optim.AdamW
+    options:
+      lr: 0.001
+

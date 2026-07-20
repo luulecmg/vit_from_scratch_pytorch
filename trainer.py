@@ -1,148 +1,211 @@
+import os
+import time
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.distributed as dist
 from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
+from torch.utils.data.distributed import DistributedSampler
+from hydra.utils import instantiate
+
+from utils.logger import get_logger
 from tqdm import tqdm
 from pathlib import Path
 
-from modeling.vit import ViT
-from utils.logger import get_logger
+# Config Schemes
+@dataclass
+class DistributedConf:
+    backend: str = "nccl"
+    find_unused_parameters: bool = False
 
+@dataclass
+class LoggingConf:
+    log_dir: str
+    logger_name: str
 
-class Trainer(nn.Module):
-    def __init__(self, args, run_dir: Path) -> None:
-        super().__init__()
-        self.args = args
-        self.model = ViT(args)
-        self.optimizer = torch.optim.AdamW(self.model.parameters(),
-                                           lr=args.lr,
-                                           weight_decay=args.weight_decay)
-        self.loss_fn = nn.CrossEntropyLoss()
-        self.epoch = 0
-    
-        self.logger = get_logger("trainer", run_dir)
+@dataclass
+class CheckpointConf:
+    save_dir: str
+    save_freq: int = 1
 
-    def train(self, loader):
-        self.model.to(self.args.device)
-        self.logger.info("--- Start training ---")
-        train_loss = []
-        train_acc = []
-        for epoch in range(self.args.epochs):
-            epoch_loss = 0
-            epoch_acc = 0
+class Trainer():
+    def __init__(
+        self,
+        *,
+        distributed: Optional[Dict[str, Any]] = None,
+        logging: Dict[str, Any],
+        data: Dict[str, Any],
+        model: Dict[str, Any],
+        optim: Dict[str, Any],
+        loss: Dict[str, Any],
+        accelerator: str = "cuda",
+        max_epochs: int = 2,
+        val_epoch_freq: int = 1,
+        checkpoint: Dict[str, Any],
+        skip_saving_ckpts: bool = False
+    ):
+        self.max_epochs = max_epochs
+        self.val_epoch_freq = val_epoch_freq
+        self.accelerator = accelerator
+        self.skip_saving_ckpts = skip_saving_ckpts
 
-            for images, labels in tqdm(loader, desc=f"Training epoch {epoch + 1}", leave=False):
-                images, labels = images.to(self.args.device), labels.to(self.args.device)
+        # 1. Map dataclass schemes
+        self.distributed_conf = DistributedConf(**(distributed or {}))
+        self.logging_conf = LoggingConf(**logging)
+        self.checkpoint_conf = CheckpointConf(**checkpoint)
 
-                logits = self.model(images) # (B, C)
-
-                loss = self.loss_fn(logits, labels)
-                epoch_loss += loss.item()
-
-                probs = F.softmax(logits, dim=-1)
-                preds = probs.argmax(dim=-1) # (B)
-
-                acc = accuracy_score(labels.cpu(), preds.cpu(), normalize=True)
-                epoch_acc += acc
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-            
-            self.epoch = epoch
-            
-            epoch_loss /= len(loader)
-            epoch_acc /= len(loader)
-
-            train_loss.append(epoch_loss)
-            train_acc.append(epoch_acc)
-
-            self.logger.info(
-                f"Epoch {epoch+1}/{self.args.epochs} "
-                f"| Loss: {epoch_loss:.4f} "
-                f"| Acc: {epoch_acc:.2f}"
-            )
-    
-    @torch.no_grad()
-    def test(self, loader):
-        val_loss = 0
-        val_acc = 0
-
-        for images, labels in tqdm(loader, desc="Validation", leave=False):
-            images, labels = images.to(self.args.device), labels.to(self.args.device)
-
-            logits = self.model(images) # (B, C)
-
-            loss = self.loss_fn(logits, labels)
-            val_loss += loss.item()
-
-            probs = F.softmax(logits, dim=-1)
-            preds = probs.argmax(dim=-1) # (B)
-
-            acc = accuracy_score(labels.cpu(), preds.cpu(), normalize=True)
-            val_acc += acc
+        # 2. Setup Distributed / Devices
+        self._setup_device_and_dist()
+        if self.rank == 0:
+            os.makedirs(self.logging_conf.log_dir, exist_ok=True)
+            os.makedirs(self.checkpoint_conf.save_dir, exist_ok=True)
         
-        val_loss /= len(loader)
-        val_acc /= len(loader)
+        # 3. Instantiate components via Hydra
+        self.model = instantiate(model).to(self.device)
+        self.loss_fn = instantiate(loss).to(self.device)
 
-        self.logger.info(
-            f"Test | "
-            f"Loss: {val_loss:.4f} "
-            f"Acc: {val_acc*100:.2f}%"
-        )
-
-    @torch.no_grad()
-    def visualize(self, loader: DataLoader, run_dir: Path, num_images: int = 4):
-        self.model.eval()
-        self.model.to(self.args.device)
-
-        try:
-            images, labels = next(iter(loader))
-        except StopIteration:
-            self.logger.warning(
-                f"No data available. Skipping visualization"
+        if self.is_distributed:
+            self.model = torch.nn.parallel.DistributedDataParallel(
+                self.model,
+                device_ids=[self.local_rank] if self.accelerator == "cuda" else [],
+                find_unused_parameters=self.distributed_conf.find_unused_parameters,
             )
-            return
+        
+        # 4. Instantiate Datasets & Optimizers
+        self._setup_dataloader(data)
+        self._construct_optimizer(optim)
 
-        images = images[:num_images].to(self.args.device)
-        labels = labels[:num_images].to(self.args.device)
+        self.epoch = 0
+        self.logger = get_logger(
+            logger_name=self.logging_conf.logger_name,
+            log_dir=self.logging_conf.log_dir
+        ) 
+
+    def _setup_device_and_dist(self):
+        """Init rank, gpu device, and Pytorch Distributed Process"""
+        self.is_distributed = dist.is_available() and dist.is_initialized()
+        if self.is_distributed:
+            self.rank = dist.get_rank()
+            self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        else:
+            self.rank = 0
+            self.local_rank = 0
+        
+        if self.accelerator =="cuda" and torch.cuda.is_available():
+            self.device = torch.device("cuda", self.local_rank)
+            torch.cuda.set_device(self.device)
+        else:
+            self.device = torch.device("cpu")
+
+    def _setup_dataloader(self, data_conf: Dict[str, Any]):
+        self.train_dataset = instantiate(data_conf.train)
+        self.val_dataset = instantiate(data_conf.val)
+
+        train_sampler = DistributedSampler(self.train_dataset) if self.is_distributed else None
+        val_sampler = DistributedSampler(self.val_dataset, shuffle=False) if self.is_distributed else None
+
+        self.train_loader = DataLoader(
+            self.train_dataset, batch_size=128, sampler=train_sampler, shuffle=(train_sampler is None), num_workers=4
+        )
+        self.val_loader = DataLoader(
+            self.val_dataset, batch_size=128, sampler=val_sampler, shuffle=False, num_workers=4
+        )
+    
+    def _construct_optimizer(self, optim_conf: Dict[str, Any]):
+        raw_model = self.model.module if self.is_distributed else self.model
+        lr = optim_conf.get("options", {}).get("lr", 1e-3)
+        self.optimizer = instantiate(optim_conf["optimizer"], params=raw_model.parameters(), lr=lr)
+
+    def _step(self, batch):
+        images, labels = batch
+        images, labels = images.to(self.device), labels.to(self.device)
 
         logits = self.model(images)
-        preds = logits.argmax(dim=-1)
+        loss = self.loss_fn(logits, labels)
 
-        fig, axes = plt.subplots(1, len(images), figsize=(2.5 * len(images), 2.5))
-        if len(images) == 1:
-            axes = [axes]
+        # get corrects
+        preds = logits.argmax(dim=1)
+        corrects = (preds == labels).sum().item()
 
-        for ax, image, label, pred in zip(axes, images.cpu(), labels.cpu(), preds.cpu()):
-            image_np = image.squeeze(0).numpy()
-            ax.imshow(image_np, cmap="gray")
-            ax.set_title(f"Pred: {pred.item()} | True: {label.item()}")
-            ax.axis("off")
+        return loss, corrects, images.size(0) # why can we call shape?
 
-        visualize_path = run_dir / f"{self.args.visualize_path}"
-        visualize_path.parent.mkdir(parents=True, exist_ok=True)
+    def run_train(self):
+        while self.epoch < self.max_epochs:
+            if self.is_distributed and hasattr(self.train_loader.sampler, "set_epoch"):
+                self.train_loader.sampler.set_epoch(self.epoch)
 
-        fig.tight_layout()
-        fig.savefig(visualize_path, dpi=150)
-        plt.close(fig)
-        self.logger.info(f"Saved visualization to {visualize_path}")
+            self.model.train()
+            total_loss, total_correct, total_samples = 0.0, 0, 0
 
-    def save_checkpoint(self, run_dir: Path):
-        save_dir = run_dir / f"{self.args.save_ckpt_dir}"
-        save_dir.mkdir(parents=True, exist_ok=True)
+            for batch in tqdm(self.train_loader, desc="Training loader", leave=False):
+                self.optimizer.zero_grad()
+                loss, corrects, batch_size = self._step(batch)
+                loss.backward()
+                self.optimizer.step()
 
-        save_path = save_dir / f"epoch_{self.epoch+1}.pth"
+                total_loss += loss.item() * batch_size
+                total_correct += corrects
+                total_samples += batch_size
+            
+            if self.rank == 0:
+                self.logger.info(
+                    f"[Epoch {self.epoch+1}/{self.max_epochs}] Train loss: {total_loss/total_samples:.4f} "
+                    f"| Acc: {total_correct/total_samples:.4f}"
+                    )
+            
+            if (self.epoch + 1) % self.checkpoint_conf.save_freq == 0:
+                self.save_checkpoint()
+            
+            if (self.epoch + 1) % self.val_epoch_freq == 0:
+                self.run_val()
+            
+            self.epoch += 1
+    
+    def run_val(self):
+        self.model.eval()
+        total_loss, total_correct, total_samples = 0.0, 0, 0
+
+        with torch.inference_mode():
+            for batch in tqdm(self.val_loader, desc="Validation loading", leave=False):
+                loss, corrects, batch_size = self._step(batch)
+                total_loss += loss
+                total_correct += corrects
+                total_samples += batch_size
+        
+        if self.rank == 0:
+            self.logger.info(
+                f" -> [Val] Loss: {total_loss/total_samples:.4f} "
+                f"| Acc: {total_correct/total_samples:.4f}\n"
+            )
+        
+    def save_checkpoint(self):
+        if self.skip_saving_ckpts or self.rank != 0:
+            return
+        
+        raw_model = self.model.module if self.is_distributed else self.model
+        ckpt_path = os.path.join(self.checkpoint_conf.save_dir, f"vit_mnist_ep{self.epoch+1}.pt")
+        tmp_path = f"{ckpt_path}.tmp"
 
         torch.save({
-            "epoch": self.epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "total_epoch": self.args.epochs
-        }, save_path
-        )
+            "model": raw_model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "epoch": self.epoch+1
+        }, tmp_path)
 
-        self.logger.info(f"Checkpoint saved to {save_path}")
+        if os.path.exists(ckpt_path):
+            os.remove(ckpt_path)
+        os.rename(tmp_path, ckpt_path)
+        self.logger.info(f" [+] Saved checkpoint to {ckpt_path}")
     
+
+    def run(self):
+        if self.rank == 0:
+            self.logger.info(
+                f"🚀 Start ViT training pipeline..."
+            )
+            self.run_train()
+            self.logger.info(
+                f"✅ ViT training completed!"
+            )

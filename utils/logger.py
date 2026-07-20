@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Union
 
 class ColoredFormatter(logging.Formatter):
     """A command line formatter with different colors for each level."""
@@ -26,10 +25,15 @@ class ColoredFormatter(logging.Formatter):
         formatter = self.formatters.get(record.levelno, self.default_formatter)
         return formatter.format(record)
 
-def get_logger(name: str = "trainer", run_dir: Union[Path, None] = None):
+def get_logger(logger_name: str, log_dir: str):
     
-    logger = logging.getLogger(name)
+    logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
+
+    # remove other loggers
+    for h in logger.handlers:
+        logger.removeHandler(h)
+    logger.root.handlers = []
     
     # console
     console_handler = logging.StreamHandler()
@@ -37,8 +41,9 @@ def get_logger(name: str = "trainer", run_dir: Union[Path, None] = None):
     logger.addHandler(console_handler)
     
     # file
-    if run_dir is not None:
-        log_file_path = run_dir / f"train.log"
+    if log_dir is not None:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        log_file_path = Path(log_dir) / f"train.log"
 
         file_handler = logging.FileHandler(log_file_path)
         file_handler.setFormatter(logging.Formatter(
