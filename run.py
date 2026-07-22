@@ -20,7 +20,7 @@ def setup_distributed_backend(backend="nccl"):
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
     # init gpu (automatically ignore if run 1 normal gpu)
-    backend = cfg.trainer.get("distributed", {}).get("backend", "nccl")
+    backend = cfg.trainer.distributed.backend
     setup_distributed_backend(backend=backend)
 
     trainer = instantiate(cfg.trainer, _recursive_=False)
@@ -32,11 +32,3 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
-
-"""
-NEXT TASKS:
-- check how to run on multiple gpus
-- re-code again
-- add wandb checking
-- 
-"""

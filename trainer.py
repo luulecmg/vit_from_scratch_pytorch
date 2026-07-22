@@ -5,10 +5,12 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
+
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from hydra.utils import instantiate
+from omegaconf import DictConfig
 
 from utils.logger import get_logger
 from tqdm import tqdm
@@ -88,18 +90,17 @@ class Trainer():
         self.is_distributed = dist.is_available() and dist.is_initialized()
         if self.is_distributed:
             self.rank = dist.get_rank()
-            self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            self.local_rank = int(os.environ.get("LOCAL_RANK", 0)) # used for wrap model into DDP, rank for logging
         else:
             self.rank = 0
             self.local_rank = 0
         
         if self.accelerator =="cuda" and torch.cuda.is_available():
             self.device = torch.device("cuda", self.local_rank)
-            torch.cuda.set_device(self.device)
         else:
             self.device = torch.device("cpu")
 
-    def _setup_dataset(self, data_conf: Dict[str, Any]):
+    def _setup_dataset(self, data_conf: DictConfig):
         self.train_dataset = instantiate(data_conf.train)
         self.val_dataset = instantiate(data_conf.val)
 
@@ -171,7 +172,7 @@ class Trainer():
         with torch.inference_mode():
             for batch in tqdm(self.val_loader, desc="Validation loading", leave=False):
                 loss, corrects, batch_size = self._step(batch)
-                total_loss += loss
+                total_loss += loss.item() * batch_size
                 total_correct += corrects
                 total_samples += batch_size
         
